@@ -116,14 +116,14 @@ export default function WordSearch() {
   useEffect(() => {
     const calculateCellSize = () => {
       const viewportWidth = window.innerWidth;
-      const padding = 20; // Page padding
-      const gridPadding = 20; // Grid container padding
+      const pagePadding = 30; // Page padding (15px each side)
+      const gridPadding = 20; // Grid container padding (10px each side)
       const gap = 2; // Gap between cells
-      const availableWidth = viewportWidth - padding - gridPadding;
+      const availableWidth = viewportWidth - pagePadding - gridPadding;
       const totalGaps = (GRID_SIZE - 1) * gap;
       const maxCellSize = Math.floor((availableWidth - totalGaps) / GRID_SIZE);
       // Clamp between reasonable min/max values
-      const clampedSize = Math.max(20, Math.min(maxCellSize, 45));
+      const clampedSize = Math.max(18, Math.min(maxCellSize, 45));
       setCellSize(clampedSize);
     };
     
