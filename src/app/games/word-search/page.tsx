@@ -67,10 +67,10 @@ const WORD_LISTS: Record<string, Record<string, string[]>> = {
 };
 
 const GRID_OPTIONS = [
-  { label: 'Easy (8×8)', size: 8, cellSize: 45, wordCount: 5 },
-  { label: 'Medium (12×12)', size: 12, cellSize: 38, wordCount: 8 },
-  { label: 'Hard (15×15)', size: 15, cellSize: 32, wordCount: 10 },
-  { label: 'Expert (20×20)', size: 20, cellSize: 28, wordCount: 12 },
+  { label: 'Easy (8×8)', size: 8, wordCount: 5 },
+  { label: 'Medium (12×12)', size: 12, wordCount: 8 },
+  { label: 'Hard (15×15)', size: 15, wordCount: 10 },
+  { label: 'Expert (20×20)', size: 20, wordCount: 12 },
 ];
 
 interface Cell {
@@ -106,11 +106,31 @@ export default function WordSearch() {
   const [currentGrade, setCurrentGrade] = useState<string>('1st Grade');
   const [currentCategory, setCurrentCategory] = useState<string>('animals');
   const [gridOption, setGridOption] = useState(GRID_OPTIONS[3]); // Default to Expert 20x20
+  const [cellSize, setCellSize] = useState(28); // Will be calculated dynamically
   
   const starIdRef = useRef(0);
 
   const GRID_SIZE = gridOption.size;
-  const CELL_SIZE = gridOption.cellSize;
+
+  // Calculate cell size to fit screen
+  useEffect(() => {
+    const calculateCellSize = () => {
+      const viewportWidth = window.innerWidth;
+      const padding = 20; // Page padding
+      const gridPadding = 20; // Grid container padding
+      const gap = 2; // Gap between cells
+      const availableWidth = viewportWidth - padding - gridPadding;
+      const totalGaps = (GRID_SIZE - 1) * gap;
+      const maxCellSize = Math.floor((availableWidth - totalGaps) / GRID_SIZE);
+      // Clamp between reasonable min/max values
+      const clampedSize = Math.max(20, Math.min(maxCellSize, 45));
+      setCellSize(clampedSize);
+    };
+    
+    calculateCellSize();
+    window.addEventListener('resize', calculateCellSize);
+    return () => window.removeEventListener('resize', calculateCellSize);
+  }, [GRID_SIZE]);
 
   // Generate the word search grid
   const generateGrid = useCallback(() => {
@@ -377,8 +397,8 @@ export default function WordSearch() {
           return { ...cell, highlighted: cell.found };
         })));
         
-        const avgX = selectedCells.reduce((sum, c) => sum + c.col * CELL_SIZE + CELL_SIZE / 2, 0) / selectedCells.length;
-        const avgY = selectedCells.reduce((sum, c) => sum + c.row * CELL_SIZE + CELL_SIZE / 2, 0) / selectedCells.length;
+        const avgX = selectedCells.reduce((sum, c) => sum + c.col * cellSize + cellSize / 2, 0) / selectedCells.length;
+        const avgY = selectedCells.reduce((sum, c) => sum + c.row * cellSize + cellSize / 2, 0) / selectedCells.length;
         createStars(avgX, avgY);
         
         setScore(prev => prev + foundWord.length * 10);
@@ -522,7 +542,7 @@ export default function WordSearch() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: `repeat(${GRID_SIZE}, ${CELL_SIZE}px)`,
+            gridTemplateColumns: `repeat(${GRID_SIZE}, ${cellSize}px)`,
             gap: '2px',
             userSelect: 'none',
           }}
@@ -543,12 +563,12 @@ export default function WordSearch() {
                 }}
                 data-cell={`${rowIndex}-${colIndex}`}
                 style={{
-                  width: CELL_SIZE,
-                  height: CELL_SIZE,
+                  width: cellSize,
+                  height: cellSize,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: `clamp(${CELL_SIZE * 0.4}px, ${CELL_SIZE * 0.5}px, ${CELL_SIZE * 0.6}px)`,
+                  fontSize: `clamp(${cellSize * 0.4}px, ${cellSize * 0.5}px, ${cellSize * 0.6}px)`,
                   fontWeight: 'bold',
                   borderRadius: '6px',
                   background: selectedCells.some(s => s.row === rowIndex && s.col === colIndex)
