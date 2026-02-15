@@ -103,9 +103,9 @@ export default function WordSearch() {
   const [score, setScore] = useState(0);
   
   // Settings state
-  const [currentGrade, setCurrentGrade] = useState<string>('1st Grade');
-  const [currentCategory, setCurrentCategory] = useState<string>('animals');
-  const [gridOption, setGridOption] = useState(GRID_OPTIONS[3]); // Default to Expert 20x20
+  const [currentGrade, setCurrentGrade] = useState<string>('3rd Grade');
+  const [currentCategory, setCurrentCategory] = useState<string>('science');
+  const [gridOption, setGridOption] = useState(GRID_OPTIONS[1]); // Default to Medium 12x12
   const [cellSize, setCellSize] = useState(28); // Will be calculated dynamically
   
   const starIdRef = useRef(0);
@@ -116,8 +116,8 @@ export default function WordSearch() {
   useEffect(() => {
     const calculateCellSize = () => {
       const viewportWidth = window.innerWidth;
-      const pagePadding = 30; // Page padding (15px each side)
-      const gridPadding = 20; // Grid container padding (10px each side)
+      const pagePadding = 40; // Page padding (20px each side)
+      const gridPadding = 30; // Grid container padding (15px each side)
       const gap = 2; // Gap between cells
       const availableWidth = viewportWidth - pagePadding - gridPadding;
       const totalGaps = (GRID_SIZE - 1) * gap;
