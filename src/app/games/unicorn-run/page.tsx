@@ -5,7 +5,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 // Game constants
 const GRAVITY = 0.6;
 const JUMP_FORCE = -14;
-const MOVE_SPEED = 5;
+const MOVE_SPEED = 6;
 const CLIMB_SPEED = 3;
 const GROUND_Y = 400;
 
@@ -14,6 +14,36 @@ const UNICORN_COLORS = {
   body: ['#FFB6C1', '#DDA0DD', '#87CEEB', '#98FB98', '#FFE4B5', '#FFC0CB', '#E6E6FA', '#B0E0E6'],
   mane: ['#FF69B4', '#FF1493', '#DA70D6', '#9370DB', '#8A2BE2', '#FFD700', '#FF6347', '#00CED1'],
   horn: ['#FFD700', '#FFC0CB', '#FFFFFF', '#FF69B4', '#00FFFF'],
+};
+
+type BiomeType = 'MEADOW' | 'CANDY' | 'SKY';
+
+interface Biome {
+  type: BiomeType;
+  skyColors: [string, string, string];
+  groundColors: [string, string, string];
+  obstacleTypes: string[];
+}
+
+const BIOMES: Record<BiomeType, Biome> = {
+  MEADOW: {
+    type: 'MEADOW',
+    skyColors: ['#87CEEB', '#B0E0E6', '#FFE4E1'],
+    groundColors: ['#90EE90', '#98FB98', '#228B22'],
+    obstacleTypes: ['rock', 'tree', 'tallTree', 'hole'],
+  },
+  CANDY: {
+    type: 'CANDY',
+    skyColors: ['#FFC0CB', '#FFB6C1', '#FFF0F5'],
+    groundColors: ['#FF69B4', '#FF1493', '#C71585'],
+    obstacleTypes: ['lollipop', 'cake', 'cookie', 'chocolate_pit'],
+  },
+  SKY: {
+    type: 'SKY',
+    skyColors: ['#00BFFF', '#1E90FF', '#E0FFFF'],
+    groundColors: ['#F0F8FF', '#E6E6FA', '#B0C4DE'],
+    obstacleTypes: ['cloud_obstacle', 'storm_cloud', 'rainbow_bridge'],
+  }
 };
 
 interface Particle {
@@ -31,8 +61,17 @@ interface Obstacle {
   y: number;
   width: number;
   height: number;
-  type: 'hole' | 'tree' | 'rock' | 'tallTree';
+  type: string;
   platform?: { x: number; y: number; width: number; height: number }[];
+}
+
+interface Collectible {
+  x: number;
+  y: number;
+  type: 'STAR' | 'GEM';
+  value: number;
+  collected: boolean;
+  floatOffset: number;
 }
 
 interface Cloud {
@@ -40,33 +79,16 @@ interface Cloud {
   y: number;
   width: number;
   speed: number;
+  layer: number;
 }
 
-interface Flower {
+interface Decoration {
   x: number;
   y: number;
+  type: string;
   color: string;
   size: number;
-}
-
-interface Rainbow {
-  x: number;
-  y: number;
-}
-
-interface Star {
-  x: number;
-  y: number;
-  size: number;
-  twinkle: number;
-}
-
-interface Butterfly {
-  x: number;
-  y: number;
-  color: string;
-  wingPhase: number;
-  speed: number;
+  layer: number;
 }
 
 interface GameState {
@@ -82,20 +104,23 @@ interface GameState {
     isOnGround: boolean;
     facingRight: boolean;
     animFrame: number;
+    invincible: number;
   };
   camera: {
     x: number;
   };
   score: number;
+  distance: number;
   gameOver: boolean;
   started: boolean;
+  biome: BiomeType;
   obstacles: Obstacle[];
+  collectibles: Collectible[];
   particles: Particle[];
   clouds: Cloud[];
-  flowers: Flower[];
-  rainbows: Rainbow[];
-  stars: Star[];
-  butterflies: Butterfly[];
+  decorations: Decoration[];
+  stars: { x: number; y: number; size: number; twinkle: number }[];
+  lastBiomeSwitch: number;
 }
 
 export default function UnicornRun() {
@@ -124,133 +149,169 @@ export default function UnicornRun() {
       isOnGround: true,
       facingRight: true,
       animFrame: 0,
+      invincible: 0,
     },
     camera: { x: 0 },
     score: 0,
+    distance: 0,
     gameOver: false,
     started: false,
+    biome: 'MEADOW',
     obstacles: [],
+    collectibles: [],
     particles: [],
     clouds: [],
-    flowers: [],
-    rainbows: [],
+    decorations: [],
     stars: [],
-    butterflies: [],
+    lastBiomeSwitch: 0,
   });
 
-  // Generate obstacles
-  const generateObstacles = useCallback((startX: number, count: number): Obstacle[] => {
-    const obstacles: Obstacle[] = [];
-    let lastX = startX;
-    
-    for (let i = 0; i < count; i++) {
-      const gap = 300 + Math.random() * 400;
-      const type = ['hole', 'tree', 'rock', 'tallTree'][Math.floor(Math.random() * 4)] as Obstacle['type'];
-      
-      let obstacle: Obstacle = {
-        x: lastX + gap,
-        y: GROUND_Y,
-        width: 0,
-        height: 0,
-        type,
-      };
-      
-      switch (type) {
-        case 'hole':
-          obstacle.width = 80 + Math.random() * 60;
-          obstacle.height = 60;
-          obstacle.y = GROUND_Y;
-          break;
-        case 'tree':
-          obstacle.width = 40;
-          obstacle.height = 100;
-          obstacle.y = GROUND_Y - 100;
-          break;
-        case 'rock':
-          obstacle.width = 50 + Math.random() * 30;
-          obstacle.height = 40;
-          obstacle.y = GROUND_Y - 40;
-          break;
-        case 'tallTree':
-          obstacle.width = 50;
-          obstacle.height = 250;
-          obstacle.y = GROUND_Y - 250;
-          obstacle.platform = [
-            { x: obstacle.x - 30, y: obstacle.y + 80, width: 110, height: 20 },
-            { x: obstacle.x - 20, y: obstacle.y + 150, width: 90, height: 20 },
-          ];
-          break;
-      }
-      
-      obstacles.push(obstacle);
-      lastX = obstacle.x + obstacle.width;
-    }
-    
-    return obstacles;
+  const createObstacle = useCallback((x: number, type: string, biome: BiomeType, widthOverride?: number): Obstacle => {
+     let obs: Obstacle = { x, y: GROUND_Y, width: 60, height: 60, type };
+     
+     switch(type) {
+         // Meadow
+         case 'hole': 
+             obs.width = widthOverride || 100; obs.height = 60; obs.y = GROUND_Y; break;
+         case 'rock':
+             obs.width = 50; obs.height = 40; obs.y = GROUND_Y - 40; break;
+         case 'tree':
+             obs.width = 40; obs.height = 100; obs.y = GROUND_Y - 100; break;
+         case 'tallTree':
+             obs.width = 50; obs.height = 250; obs.y = GROUND_Y - 250;
+             obs.platform = [
+                { x: x - 30, y: obs.y + 80, width: 110, height: 20 },
+                { x: x - 20, y: obs.y + 150, width: 90, height: 20 },
+             ];
+             break;
+             
+         // Candy
+         case 'chocolate_pit':
+             obs.width = widthOverride || 120; obs.height = 60; obs.y = GROUND_Y; break;
+         case 'lollipop':
+             obs.width = 30; obs.height = 120; obs.y = GROUND_Y - 120; break;
+         case 'cake':
+             obs.width = 80; obs.height = 80; obs.y = GROUND_Y - 80; break;
+         case 'cookie':
+             obs.width = 40; obs.height = 40; obs.y = GROUND_Y - 40; break;
+             
+         // Sky
+         case 'cloud_obstacle':
+             obs.width = 100; obs.height = 40; obs.y = GROUND_Y - 150; break;
+         case 'storm_cloud':
+             obs.width = 80; obs.height = 80; obs.y = GROUND_Y - 200; break;
+         default:
+             break;
+     }
+     return obs;
   }, []);
 
-  // Generate background elements
+  const generateChunk = useCallback((startX: number, biome: BiomeType): { obstacles: Obstacle[], collectibles: Collectible[], width: number } => {
+    const obstacles: Obstacle[] = [];
+    const collectibles: Collectible[] = [];
+    let currentX = startX;
+    
+    const patterns = ['FLAT_RUN', 'JUMP_GAP', 'DOUBLE_JUMP', 'STAIRCASE'];
+    const pattern = patterns[Math.floor(Math.random() * patterns.length)];
+    // const difficulty = Math.min(gameStateRef.current.distance / 5000, 1);
+
+    const addCollectible = (x: number, y: number) => {
+      if (Math.random() > 0.3) {
+        collectibles.push({
+          x, y,
+          type: Math.random() > 0.8 ? 'GEM' : 'STAR',
+          value: Math.random() > 0.8 ? 50 : 10,
+          collected: false,
+          floatOffset: Math.random() * Math.PI * 2
+        });
+      }
+    };
+
+    switch (pattern) {
+      case 'FLAT_RUN':
+        const length = 400 + Math.random() * 400;
+        const numObs = Math.floor(length / 200);
+        for(let i=0; i<numObs; i++) {
+          if (Math.random() > 0.4) {
+             const type = BIOMES[biome].obstacleTypes[Math.floor(Math.random() * 2)];
+             obstacles.push(createObstacle(currentX + 100 + i * 200, type, biome));
+             addCollectible(currentX + 100 + i * 200, GROUND_Y - 150);
+          }
+        }
+        currentX += length;
+        break;
+
+      case 'JUMP_GAP':
+        const pitWidth = 100 + Math.random() * 50;
+        obstacles.push(createObstacle(currentX, biome === 'CANDY' ? 'chocolate_pit' : 'hole', biome, pitWidth));
+        addCollectible(currentX + pitWidth/2, GROUND_Y - 120);
+        addCollectible(currentX + pitWidth/2 + 40, GROUND_Y - 140);
+        addCollectible(currentX + pitWidth/2 - 40, GROUND_Y - 140);
+        currentX += pitWidth + 200;
+        break;
+        
+      case 'DOUBLE_JUMP':
+        const tallType = biome === 'MEADOW' ? 'tallTree' : (biome === 'CANDY' ? 'cake' : 'cloud_obstacle');
+        obstacles.push(createObstacle(currentX, tallType, biome));
+        addCollectible(currentX, GROUND_Y - 250);
+        addCollectible(currentX, GROUND_Y - 200);
+        currentX += 300;
+        break;
+        
+      case 'STAIRCASE':
+        for(let i=0; i<3; i++) {
+            const h = 50 + i * 50;
+            const obs = createObstacle(currentX + i * 150, 'rock', biome);
+            obs.y = GROUND_Y - h;
+            obs.height = h;
+            obstacles.push(obs);
+            addCollectible(currentX + i * 150, GROUND_Y - h - 50);
+        }
+        currentX += 450;
+        break;
+    }
+    
+    return { obstacles, collectibles, width: currentX - startX };
+  }, [createObstacle]);
+
   const generateBackground = useCallback(() => {
     const state = gameStateRef.current;
     
-    // Clouds
     state.clouds = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 20; i++) {
       state.clouds.push({
         x: Math.random() * 2000,
-        y: 30 + Math.random() * 100,
-        width: 80 + Math.random() * 120,
-        speed: 0.3 + Math.random() * 0.5,
+        y: Math.random() * 300,
+        width: 60 + Math.random() * 100,
+        speed: 0.1 + Math.random() * 0.4,
+        layer: Math.floor(Math.random() * 3)
       });
     }
     
-    // Flowers
-    state.flowers = [];
-    const flowerColors = ['#FF69B4', '#FFB6C1', '#DDA0DD', '#FFE4E1', '#FFC0CB', '#FFD700'];
-    for (let i = 0; i < 50; i++) {
-      state.flowers.push({
+    state.decorations = [];
+    const decorColors = ['#FF69B4', '#FFB6C1', '#DDA0DD', '#FFE4E1', '#FFC0CB', '#FFD700'];
+    for (let i = 0; i < 60; i++) {
+      state.decorations.push({
         x: Math.random() * 5000,
         y: GROUND_Y - 5 - Math.random() * 15,
-        color: flowerColors[Math.floor(Math.random() * flowerColors.length)],
+        color: decorColors[Math.floor(Math.random() * decorColors.length)],
         size: 8 + Math.random() * 12,
+        type: Math.random() > 0.5 ? 'flower' : 'mushroom',
+        layer: 2
       });
     }
     
-    // Rainbows
-    state.rainbows = [];
-    for (let i = 0; i < 3; i++) {
-      state.rainbows.push({
-        x: 500 + i * 1500 + Math.random() * 500,
-        y: 50,
-      });
-    }
-    
-    // Stars
     state.stars = [];
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 50; i++) {
       state.stars.push({
         x: Math.random() * 3000,
-        y: 20 + Math.random() * 150,
-        size: 2 + Math.random() * 4,
+        y: Math.random() * 300,
+        size: 1 + Math.random() * 3,
         twinkle: Math.random() * Math.PI * 2,
-      });
-    }
-    
-    // Butterflies
-    state.butterflies = [];
-    const butterflyColors = ['#FF69B4', '#FFD700', '#00CED1', '#FF6347', '#9370DB'];
-    for (let i = 0; i < 8; i++) {
-      state.butterflies.push({
-        x: Math.random() * 2000,
-        y: 100 + Math.random() * 200,
-        color: butterflyColors[Math.floor(Math.random() * butterflyColors.length)],
-        wingPhase: Math.random() * Math.PI * 2,
-        speed: 1 + Math.random() * 2,
       });
     }
   }, []);
 
-  // Initialize game
   const initGame = useCallback(() => {
     const state = gameStateRef.current;
     state.unicorn = {
@@ -265,115 +326,141 @@ export default function UnicornRun() {
       isOnGround: true,
       facingRight: true,
       animFrame: 0,
+      invincible: 0,
     };
     state.camera = { x: 0 };
     state.score = 0;
+    state.distance = 0;
     state.gameOver = false;
     state.started = true;
-    state.obstacles = generateObstacles(500, 20);
+    state.biome = 'MEADOW';
+    state.obstacles = [];
+    state.collectibles = [];
+    state.lastBiomeSwitch = 0;
+    
+    let currentX = 500;
+    for(let i=0; i<5; i++) {
+        const chunk = generateChunk(currentX, state.biome);
+        state.obstacles.push(...chunk.obstacles);
+        state.collectibles.push(...chunk.collectibles);
+        currentX += chunk.width;
+    }
+    
     state.particles = [];
     generateBackground();
-  }, [generateObstacles, generateBackground]);
+  }, [generateChunk, generateBackground]);
 
-  // Draw functions
-  const drawCloud = (ctx: CanvasRenderingContext2D, cloud: Cloud, cameraX: number) => {
-    const x = cloud.x - cameraX * 0.3;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    ctx.beginPath();
-    ctx.arc(x, cloud.y, cloud.width * 0.3, 0, Math.PI * 2);
-    ctx.arc(x + cloud.width * 0.25, cloud.y - 10, cloud.width * 0.25, 0, Math.PI * 2);
-    ctx.arc(x + cloud.width * 0.5, cloud.y, cloud.width * 0.35, 0, Math.PI * 2);
-    ctx.arc(x + cloud.width * 0.75, cloud.y - 5, cloud.width * 0.2, 0, Math.PI * 2);
-    ctx.fill();
-  };
-
-  const drawRainbow = (ctx: CanvasRenderingContext2D, rainbow: Rainbow, cameraX: number) => {
-    const x = rainbow.x - cameraX * 0.2;
-    const colors = ['#FF0000', '#FF7F00', '#FFFF00', '#00FF00', '#0000FF', '#4B0082', '#9400D3'];
-    const radius = 120;
+  const drawBackground = (ctx: CanvasRenderingContext2D, time: number) => {
+    const state = gameStateRef.current;
+    const biome = BIOMES[state.biome];
+    const camX = state.camera.x;
     
-    colors.forEach((color, i) => {
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 8;
-      ctx.beginPath();
-      ctx.arc(x, rainbow.y + 150, radius - i * 8, Math.PI, 0, false);
-      ctx.stroke();
-    });
-  };
-
-  const drawFlower = (ctx: CanvasRenderingContext2D, flower: Flower, cameraX: number) => {
-    const x = flower.x - cameraX;
-    if (x < -50 || x > 850) return;
+    const gradient = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
+    gradient.addColorStop(0, biome.skyColors[0]);
+    gradient.addColorStop(0.5, biome.skyColors[1]);
+    gradient.addColorStop(1, biome.skyColors[2]);
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 800, GROUND_Y);
     
-    ctx.fillStyle = '#228B22';
-    ctx.fillRect(x - 1, flower.y, 2, 15);
-    
-    ctx.fillStyle = flower.color;
-    for (let i = 0; i < 5; i++) {
-      const angle = (i / 5) * Math.PI * 2;
-      ctx.beginPath();
-      ctx.arc(
-        x + Math.cos(angle) * flower.size * 0.4,
-        flower.y + Math.sin(angle) * flower.size * 0.4,
-        flower.size * 0.4,
-        0,
-        Math.PI * 2
-      );
-      ctx.fill();
-    }
     ctx.fillStyle = '#FFD700';
+    ctx.shadowColor = '#FFA500';
+    ctx.shadowBlur = 20;
     ctx.beginPath();
-    ctx.arc(x, flower.y, flower.size * 0.3, 0, Math.PI * 2);
+    ctx.arc(700, 80, 40, 0, Math.PI * 2);
     ctx.fill();
-  };
+    ctx.shadowBlur = 0;
 
-  const drawStar = (ctx: CanvasRenderingContext2D, star: Star, cameraX: number, time: number) => {
-    const x = star.x - cameraX * 0.1;
-    const twinkle = Math.sin(time * 0.005 + star.twinkle) * 0.5 + 0.5;
-    
-    ctx.fillStyle = `rgba(255, 255, 200, ${0.5 + twinkle * 0.5})`;
-    ctx.beginPath();
-    for (let i = 0; i < 5; i++) {
-      const angle = (i * 4 * Math.PI) / 5 - Math.PI / 2;
-      const r = star.size * (i % 2 === 0 ? 1 : 0.5);
-      if (i === 0) ctx.moveTo(x + Math.cos(angle) * r, star.y + Math.sin(angle) * r);
-      else ctx.lineTo(x + Math.cos(angle) * r, star.y + Math.sin(angle) * r);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+    state.clouds.filter(c => c.layer === 0).forEach(c => {
+        const x = (c.x - camX * 0.1) % 2000;
+        const drawX = x < -100 ? x + 2000 : x;
+        ctx.beginPath();
+        ctx.arc(drawX, c.y, c.width, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    if (state.biome === 'MEADOW') {
+        ctx.fillStyle = '#65A965';
+        ctx.beginPath();
+        ctx.moveTo(0, GROUND_Y);
+        for(let i=0; i<=800; i+=100) {
+            const h = Math.sin((i + camX * 0.2) * 0.01) * 50 + 100;
+            ctx.lineTo(i, GROUND_Y - h);
+        }
+        ctx.lineTo(800, GROUND_Y);
+        ctx.fill();
+    } else if (state.biome === 'CANDY') {
+        ctx.fillStyle = '#FF69B4'; 
+        ctx.beginPath();
+        ctx.moveTo(0, GROUND_Y);
+        for(let i=0; i<=800; i+=100) {
+            const h = Math.abs(Math.sin((i + camX * 0.2) * 0.01)) * 150 + 50;
+            ctx.lineTo(i, GROUND_Y - h);
+        }
+        ctx.lineTo(800, GROUND_Y);
+        ctx.fill();
     }
-    ctx.closePath();
-    ctx.fill();
-  };
 
-  const drawButterfly = (ctx: CanvasRenderingContext2D, butterfly: Butterfly, cameraX: number, time: number) => {
-    const x = butterfly.x - cameraX;
-    const wingAngle = Math.sin(time * 0.02 + butterfly.wingPhase) * 0.5;
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    state.clouds.filter(c => c.layer === 1).forEach(c => {
+        const x = (c.x - camX * 0.4) % 2000;
+        const drawX = x < -100 ? x + 2000 : x;
+        ctx.beginPath();
+        ctx.arc(drawX, c.y, c.width * 0.8, 0, Math.PI * 2);
+        ctx.arc(drawX + 30, c.y - 10, c.width * 0.6, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    const groundGradient = ctx.createLinearGradient(0, GROUND_Y, 0, GROUND_Y + 100);
+    groundGradient.addColorStop(0, biome.groundColors[0]);
+    groundGradient.addColorStop(0.3, biome.groundColors[1]);
+    groundGradient.addColorStop(1, biome.groundColors[2]);
+    ctx.fillStyle = groundGradient;
+    ctx.fillRect(0, GROUND_Y, 800, 100);
     
-    ctx.fillStyle = butterfly.color;
-    ctx.save();
-    ctx.translate(x, butterfly.y);
-    
-    // Left wing
-    ctx.save();
-    ctx.rotate(-wingAngle);
-    ctx.beginPath();
-    ctx.ellipse(-10, 0, 12, 8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    
-    // Right wing
-    ctx.save();
-    ctx.rotate(wingAngle);
-    ctx.beginPath();
-    ctx.ellipse(10, 0, 12, 8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-    
-    // Body
-    ctx.fillStyle = '#333';
-    ctx.beginPath();
-    ctx.ellipse(0, 0, 3, 10, 0, 0, Math.PI * 2);
-    ctx.fill();
-    
-    ctx.restore();
+    ctx.strokeStyle = biome.groundColors[2];
+    ctx.lineWidth = 2;
+    const scrollOffset = camX % 50;
+    for (let i = -50; i < 850; i+=20) {
+        if ((i * 1234.56) % 1 > 0.5) continue;
+        const x = i - scrollOffset;
+        ctx.beginPath();
+        ctx.moveTo(x, GROUND_Y);
+        ctx.lineTo(x - 5, GROUND_Y - 8);
+        ctx.moveTo(x, GROUND_Y);
+        ctx.lineTo(x + 5, GROUND_Y - 6);
+        ctx.stroke();
+    }
+
+    state.decorations.forEach(d => {
+        const x = d.x - camX;
+        if (x < -50 || x > 850) return;
+        
+        if (d.type === 'flower') {
+            ctx.fillStyle = '#228B22';
+            ctx.fillRect(x - 1, d.y, 2, 15);
+            ctx.fillStyle = d.color;
+            ctx.beginPath();
+            ctx.arc(x, d.y, d.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#FFFF00';
+            ctx.beginPath();
+            ctx.arc(x, d.y, d.size * 0.4, 0, Math.PI * 2);
+            ctx.fill();
+        } else {
+             ctx.fillStyle = '#FFF8DC';
+             ctx.fillRect(x - d.size/4, d.y, d.size/2, d.size);
+             ctx.fillStyle = d.color;
+             ctx.beginPath();
+             ctx.arc(x, d.y, d.size, Math.PI, 0);
+             ctx.fill();
+             ctx.fillStyle = '#FFF';
+             ctx.beginPath();
+             ctx.arc(x - d.size/2, d.y - d.size/2, d.size/5, 0, Math.PI*2);
+             ctx.arc(x + d.size/2, d.y - d.size/3, d.size/5, 0, Math.PI*2);
+             ctx.fill();
+        }
+    });
   };
 
   const drawUnicorn = (ctx: CanvasRenderingContext2D, cameraX: number, time: number) => {
@@ -382,6 +469,8 @@ export default function UnicornRun() {
     const x = u.x - cameraX;
     const y = u.y;
     
+    if (u.invincible > 0 && Math.floor(time / 100) % 2 === 0) return;
+
     ctx.save();
     ctx.translate(x, y);
     if (!u.facingRight) {
@@ -389,143 +478,132 @@ export default function UnicornRun() {
       ctx.translate(-u.width, 0);
     }
     
-    // Leg animation
-    const legOffset = u.isOnGround ? Math.sin(time * 0.01) * 5 : 0;
+    const runCycle = time * 0.02;
+    const legL = u.isOnGround ? Math.sin(runCycle) * 10 : 5;
+    const legR = u.isOnGround ? Math.sin(runCycle + Math.PI) * 10 : -5;
     
-    // Back legs
     ctx.fillStyle = customization.bodyColor;
-    ctx.fillRect(10, 40, 10, 25 + (u.isOnGround ? legOffset : 0));
-    ctx.fillRect(35, 40, 10, 25 + (u.isOnGround ? -legOffset : 0));
-    
-    // Hooves
+    ctx.save();
+    ctx.translate(15, 45);
+    ctx.rotate(legL * 0.05);
+    ctx.fillRect(-5, 0, 10, 25); 
     ctx.fillStyle = '#FFB6C1';
-    ctx.fillRect(10, 62 + (u.isOnGround ? legOffset : 0), 10, 6);
-    ctx.fillRect(35, 62 + (u.isOnGround ? -legOffset : 0), 10, 6);
+    ctx.fillRect(-5, 25, 10, 6);
+    ctx.restore();
+
+    ctx.fillStyle = customization.bodyColor;
+    ctx.save();
+    ctx.translate(35, 45);
+    ctx.rotate(legR * 0.05);
+    ctx.fillRect(-5, 0, 10, 25);
+    ctx.fillStyle = '#FFB6C1';
+    ctx.fillRect(-5, 25, 10, 6);
+    ctx.restore();
     
-    // Body
     ctx.fillStyle = customization.bodyColor;
     ctx.beginPath();
-    ctx.ellipse(30, 35, 25, 20, 0, 0, Math.PI * 2);
+    ctx.ellipse(30, 35, 28, 22, 0, 0, Math.PI * 2);
     ctx.fill();
     
-    // Tail
     ctx.strokeStyle = customization.maneColor;
-    ctx.lineWidth = 4;
+    ctx.lineWidth = 6;
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(5, 30);
     const tailWave = Math.sin(time * 0.008) * 10;
-    ctx.quadraticCurveTo(-15 + tailWave, 35, -20 + tailWave, 50);
+    ctx.quadraticCurveTo(-20 + tailWave, 35, -25 + tailWave, 55);
     ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(5, 35);
-    ctx.quadraticCurveTo(-10 + tailWave, 45, -15 + tailWave, 60);
-    ctx.stroke();
-    
-    // Front legs
+
     ctx.fillStyle = customization.bodyColor;
-    ctx.fillRect(15, 40, 10, 25 + (u.isOnGround ? -legOffset : 0));
-    ctx.fillRect(40, 40, 10, 25 + (u.isOnGround ? legOffset : 0));
-    
-    // Hooves (front)
+    ctx.save();
+    ctx.translate(45, 45);
+    ctx.rotate(legR * 0.05);
+    ctx.fillRect(-5, 0, 10, 25);
     ctx.fillStyle = '#FFB6C1';
-    ctx.fillRect(15, 62 + (u.isOnGround ? -legOffset : 0), 10, 6);
-    ctx.fillRect(40, 62 + (u.isOnGround ? legOffset : 0), 10, 6);
-    
-    // Neck
+    ctx.fillRect(-5, 25, 10, 6);
+    ctx.restore();
+
     ctx.fillStyle = customization.bodyColor;
+    ctx.save();
+    ctx.translate(50, 25);
+    ctx.rotate(-0.2);
+    ctx.fillRect(0, -20, 15, 30);
+    ctx.restore();
+    
+    ctx.fillStyle = customization.bodyColor;
+    ctx.save();
+    ctx.translate(62, 10);
     ctx.beginPath();
-    ctx.moveTo(45, 25);
-    ctx.lineTo(55, 5);
-    ctx.lineTo(65, 5);
-    ctx.lineTo(55, 35);
-    ctx.closePath();
+    ctx.ellipse(0, 0, 16, 13, 0.2, 0, Math.PI * 2);
     ctx.fill();
     
-    // Head
-    ctx.beginPath();
-    ctx.ellipse(62, 8, 15, 12, 0.3, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Ear
-    ctx.beginPath();
-    ctx.moveTo(55, -5);
-    ctx.lineTo(52, -15);
-    ctx.lineTo(58, -8);
-    ctx.closePath();
-    ctx.fill();
-    
-    // Horn
-    const gradient = ctx.createLinearGradient(62, -10, 62, -35);
+    const gradient = ctx.createLinearGradient(0, -10, 5, -40);
     gradient.addColorStop(0, customization.hornColor);
-    gradient.addColorStop(0.5, '#FFFFFF');
-    gradient.addColorStop(1, customization.hornColor);
+    gradient.addColorStop(1, '#FFF');
     ctx.fillStyle = gradient;
     ctx.beginPath();
-    ctx.moveTo(58, -10);
-    ctx.lineTo(62, -40);
-    ctx.lineTo(66, -10);
-    ctx.closePath();
+    ctx.moveTo(2, -10);
+    ctx.lineTo(8, -40);
+    ctx.lineTo(14, -8);
     ctx.fill();
-    
-    // Horn spiral
-    ctx.strokeStyle = '#FFD700';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 5; i++) {
-      ctx.beginPath();
-      ctx.arc(62, -15 - i * 5, 3 - i * 0.3, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    
-    // Mane
-    ctx.fillStyle = customization.maneColor;
-    for (let i = 0; i < 6; i++) {
-      const maneWave = Math.sin(time * 0.01 + i * 0.5) * 3;
-      ctx.beginPath();
-      ctx.arc(50 - i * 6, 10 + i * 4 + maneWave, 8, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    
-    // Eye
+
     ctx.fillStyle = '#000';
     ctx.beginPath();
-    ctx.ellipse(68, 5, 3, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#FFF';
-    ctx.beginPath();
-    ctx.arc(69, 3, 1.5, 0, Math.PI * 2);
+    ctx.arc(5, -2, 2.5, 0, Math.PI * 2);
     ctx.fill();
     
-    // Eyelashes
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 3; i++) {
-      ctx.beginPath();
-      ctx.moveTo(70 + i * 2, 2);
-      ctx.lineTo(72 + i * 2, -2);
-      ctx.stroke();
-    }
-    
-    // Blush
-    ctx.fillStyle = 'rgba(255, 150, 150, 0.5)';
-    ctx.beginPath();
-    ctx.ellipse(58, 12, 5, 3, 0, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Sparkles around unicorn
-    if (Math.random() < 0.1) {
-      state.particles.push({
-        x: x + Math.random() * u.width,
-        y: y + Math.random() * u.height,
-        vx: (Math.random() - 0.5) * 2,
-        vy: -Math.random() * 2,
-        life: 30,
-        color: ['#FFD700', '#FF69B4', '#00FFFF', '#FFB6C1'][Math.floor(Math.random() * 4)],
-        size: 3 + Math.random() * 3,
-      });
+    ctx.fillStyle = customization.maneColor;
+    for(let i=0; i<5; i++) {
+        ctx.beginPath();
+        ctx.arc(-8 - i*3, -5 + i*5, 6, 0, Math.PI * 2);
+        ctx.fill();
     }
     
     ctx.restore();
+    ctx.restore();
+  };
+
+  const drawCollectible = (ctx: CanvasRenderingContext2D, c: Collectible, cameraX: number, time: number) => {
+      const x = c.x - cameraX;
+      if (x < -50 || x > 850) return;
+      const y = c.y + Math.sin(time * 0.005 + c.floatOffset) * 10;
+      
+      ctx.save();
+      ctx.translate(x, y);
+      
+      if (c.type === 'STAR') {
+          ctx.fillStyle = '#FFD700';
+          ctx.beginPath();
+          for(let i=0; i<5; i++) {
+              ctx.lineTo(Math.cos((18+i*72)*Math.PI/180)*15, -Math.sin((18+i*72)*Math.PI/180)*15);
+              ctx.lineTo(Math.cos((54+i*72)*Math.PI/180)*7, -Math.sin((54+i*72)*Math.PI/180)*7);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.shadowColor = '#FFF';
+          ctx.shadowBlur = 10;
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+      } else if (c.type === 'GEM') {
+          ctx.fillStyle = '#00FFFF';
+          ctx.beginPath();
+          ctx.moveTo(0, -15);
+          ctx.lineTo(12, -5);
+          ctx.lineTo(12, 5);
+          ctx.lineTo(0, 15);
+          ctx.lineTo(-12, 5);
+          ctx.lineTo(-12, -5);
+          ctx.closePath();
+          ctx.fill();
+          
+          ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+          ctx.beginPath();
+          ctx.moveTo(-12, -5); ctx.lineTo(12, -5);
+          ctx.moveTo(0, -15); ctx.lineTo(0, 15);
+          ctx.stroke();
+      }
+      
+      ctx.restore();
   };
 
   const drawObstacle = (ctx: CanvasRenderingContext2D, obstacle: Obstacle, cameraX: number) => {
@@ -534,156 +612,88 @@ export default function UnicornRun() {
     
     switch (obstacle.type) {
       case 'hole':
-        ctx.fillStyle = '#1a0a2e';
+      case 'chocolate_pit':
+        const holeGrad = ctx.createLinearGradient(0, GROUND_Y, 0, GROUND_Y + 60);
+        holeGrad.addColorStop(0, obstacle.type === 'hole' ? '#1a0a2e' : '#3E2723');
+        holeGrad.addColorStop(1, obstacle.type === 'hole' ? '#000' : '#281815');
+        ctx.fillStyle = holeGrad;
         ctx.fillRect(x, GROUND_Y, obstacle.width, 60);
-        ctx.fillStyle = '#2d1b4e';
-        ctx.fillRect(x + 5, GROUND_Y + 5, obstacle.width - 10, 50);
         break;
         
       case 'tree':
-        // Trunk
         ctx.fillStyle = '#8B4513';
-        ctx.fillRect(x + 15, obstacle.y + 40, 20, 60);
-        // Leaves
+        ctx.fillRect(x + 10, obstacle.y + 40, 20, 60);
         ctx.fillStyle = '#228B22';
-        ctx.beginPath();
-        ctx.arc(x + 25, obstacle.y + 30, 35, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#32CD32';
-        ctx.beginPath();
-        ctx.arc(x + 15, obstacle.y + 45, 25, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(x + 35, obstacle.y + 45, 25, 0, Math.PI * 2);
-        ctx.fill();
-        // Flowers on tree
-        ctx.fillStyle = '#FF69B4';
-        for (let i = 0; i < 5; i++) {
-          ctx.beginPath();
-          ctx.arc(x + 10 + i * 8, obstacle.y + 20 + Math.sin(i) * 10, 5, 0, Math.PI * 2);
-          ctx.fill();
-        }
-        break;
-        
-      case 'rock':
-        ctx.fillStyle = '#696969';
-        ctx.beginPath();
-        ctx.moveTo(x, GROUND_Y);
-        ctx.lineTo(x + obstacle.width * 0.3, obstacle.y);
-        ctx.lineTo(x + obstacle.width * 0.7, obstacle.y + 5);
-        ctx.lineTo(x + obstacle.width, GROUND_Y);
-        ctx.closePath();
-        ctx.fill();
-        ctx.fillStyle = '#808080';
-        ctx.beginPath();
-        ctx.moveTo(x + obstacle.width * 0.2, GROUND_Y);
-        ctx.lineTo(x + obstacle.width * 0.4, obstacle.y + 10);
-        ctx.lineTo(x + obstacle.width * 0.6, GROUND_Y);
-        ctx.closePath();
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(x + 20, obstacle.y + 30, 25, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + 10, obstacle.y + 50, 20, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x + 30, obstacle.y + 50, 20, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#FF0000';
+        ctx.beginPath(); ctx.arc(x+15, obstacle.y+35, 3, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(x+28, obstacle.y+45, 3, 0, Math.PI*2); ctx.fill();
         break;
         
       case 'tallTree':
-        // Trunk with climbing texture
         ctx.fillStyle = '#654321';
-        ctx.fillRect(x + 15, obstacle.y, 30, obstacle.height);
-        ctx.fillStyle = '#8B4513';
-        for (let i = 0; i < obstacle.height; i += 20) {
-          ctx.fillRect(x + 15, obstacle.y + i, 30, 10);
+        ctx.fillRect(x + 15, obstacle.y, 20, obstacle.height);
+        ctx.strokeStyle = '#543210';
+        for(let i=0; i<obstacle.height; i+=15) {
+            ctx.beginPath(); ctx.moveTo(x+15, obstacle.y+i); ctx.lineTo(x+35, obstacle.y+i+5); ctx.stroke();
         }
-        // Branches and leaves
-        ctx.fillStyle = '#228B22';
-        ctx.beginPath();
-        ctx.arc(x + 30, obstacle.y + 20, 40, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#32CD32';
-        ctx.beginPath();
-        ctx.arc(x + 10, obstacle.y + 60, 30, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(x + 50, obstacle.y + 60, 30, 0, Math.PI * 2);
-        ctx.fill();
-        // Platforms (treehouse-like)
+        ctx.fillStyle = '#006400';
+        ctx.beginPath(); ctx.arc(x + 25, obstacle.y, 40, 0, Math.PI*2); ctx.fill();
+        
         if (obstacle.platform) {
-          obstacle.platform.forEach(p => {
-            ctx.fillStyle = '#DEB887';
-            ctx.fillRect(p.x - cameraX, p.y, p.width, p.height);
-            ctx.strokeStyle = '#8B4513';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(p.x - cameraX, p.y, p.width, p.height);
-          });
+            obstacle.platform.forEach(p => {
+                const px = p.x - cameraX;
+                ctx.fillStyle = '#DEB887';
+                ctx.fillRect(px, p.y, p.width, p.height);
+                ctx.fillStyle = '#555';
+                ctx.fillRect(px+5, p.y+8, 4, 4);
+                ctx.fillRect(px+p.width-9, p.y+8, 4, 4);
+            });
         }
         break;
+
+      case 'rock':
+          ctx.fillStyle = '#777';
+          ctx.beginPath();
+          ctx.moveTo(x, GROUND_Y);
+          ctx.lineTo(x+10, obstacle.y+10);
+          ctx.lineTo(x+25, obstacle.y);
+          ctx.lineTo(x+40, obstacle.y+15);
+          ctx.lineTo(x+50, GROUND_Y);
+          ctx.fill();
+          ctx.fillStyle = '#999';
+          ctx.beginPath();
+          ctx.moveTo(x+10, obstacle.y+10);
+          ctx.lineTo(x+25, obstacle.y);
+          ctx.lineTo(x+20, obstacle.y+20);
+          ctx.fill();
+          break;
+
+      case 'lollipop':
+          ctx.fillStyle = '#FFF';
+          ctx.fillRect(x + 12, obstacle.y + 30, 6, 90);
+          ctx.fillStyle = '#FF1493';
+          ctx.beginPath(); ctx.arc(x + 15, obstacle.y + 30, 25, 0, Math.PI*2); ctx.fill();
+          ctx.strokeStyle = '#FFF'; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.arc(x+15, obstacle.y+30, 15, 0, Math.PI*2); ctx.stroke();
+          ctx.beginPath(); ctx.arc(x+15, obstacle.y+30, 8, 0, Math.PI*2); ctx.stroke();
+          break;
+          
+      case 'cake':
+          ctx.fillStyle = '#8B4513';
+          ctx.fillRect(x, obstacle.y + 50, 80, 30);
+          ctx.fillStyle = '#FF69B4';
+          ctx.fillRect(x + 5, obstacle.y + 25, 70, 25);
+          ctx.fillStyle = '#FFF';
+          ctx.fillRect(x + 10, obstacle.y, 60, 25);
+          ctx.fillStyle = '#F00';
+          ctx.beginPath(); ctx.arc(x+40, obstacle.y, 8, 0, Math.PI*2); ctx.fill();
+          break;
     }
   };
 
-  const drawParticles = (ctx: CanvasRenderingContext2D) => {
-    const state = gameStateRef.current;
-    state.particles.forEach(p => {
-      ctx.fillStyle = p.color;
-      ctx.globalAlpha = p.life / 30;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.globalAlpha = 1;
-  };
-
-  const drawBackground = (ctx: CanvasRenderingContext2D, time: number) => {
-    const state = gameStateRef.current;
-    
-    // Sky gradient
-    const gradient = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
-    gradient.addColorStop(0, '#87CEEB');
-    gradient.addColorStop(0.5, '#B0E0E6');
-    gradient.addColorStop(1, '#FFE4E1');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, 800, GROUND_Y);
-    
-    // Draw elements
-    state.rainbows.forEach(r => drawRainbow(ctx, r, state.camera.x));
-    state.clouds.forEach(c => drawCloud(ctx, c, state.camera.x));
-    state.stars.forEach(s => drawStar(ctx, s, state.camera.x, time));
-    state.butterflies.forEach(b => drawButterfly(ctx, b, state.camera.x, time));
-    
-    // Ground
-    const groundGradient = ctx.createLinearGradient(0, GROUND_Y, 0, GROUND_Y + 100);
-    groundGradient.addColorStop(0, '#90EE90');
-    groundGradient.addColorStop(0.3, '#98FB98');
-    groundGradient.addColorStop(1, '#228B22');
-    ctx.fillStyle = groundGradient;
-    ctx.fillRect(0, GROUND_Y, 800, 100);
-    
-    // Grass tufts
-    ctx.strokeStyle = '#228B22';
-    ctx.lineWidth = 2;
-    for (let i = 0; i < 100; i++) {
-      const gx = (i * 50 - state.camera.x % 50);
-      if (gx < 0 || gx > 800) continue;
-      ctx.beginPath();
-      ctx.moveTo(gx, GROUND_Y);
-      ctx.lineTo(gx - 3, GROUND_Y - 10);
-      ctx.moveTo(gx, GROUND_Y);
-      ctx.lineTo(gx + 3, GROUND_Y - 12);
-      ctx.moveTo(gx, GROUND_Y);
-      ctx.lineTo(gx + 6, GROUND_Y - 8);
-      ctx.stroke();
-    }
-    
-    // Flowers
-    state.flowers.forEach(f => drawFlower(ctx, f, state.camera.x));
-  };
-
-  // Collision detection
-  const checkCollision = (rect1: { x: number; y: number; width: number; height: number }, 
-                          rect2: { x: number; y: number; width: number; height: number }) => {
-    return rect1.x < rect2.x + rect2.width &&
-           rect1.x + rect1.width > rect2.x &&
-           rect1.y < rect2.y + rect2.height &&
-           rect1.y + rect1.height > rect2.y;
-  };
-
-  // Game loop
   const gameLoop = useCallback((time: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -697,77 +707,27 @@ export default function UnicornRun() {
       return;
     }
     
-    // Update
     const u = state.unicorn;
     const keys = keysRef.current;
     
-    // Handle input
     if (keys.has('ArrowLeft') || keys.has('a')) {
-      u.vx = -MOVE_SPEED;
-      u.facingRight = false;
+      u.vx = -MOVE_SPEED; u.facingRight = false;
     } else if (keys.has('ArrowRight') || keys.has('d')) {
-      u.vx = MOVE_SPEED;
-      u.facingRight = true;
+      u.vx = MOVE_SPEED; u.facingRight = true;
     } else {
       u.vx *= 0.8;
     }
     
-    // Jump
     if ((keys.has('ArrowUp') || keys.has('w') || keys.has(' ')) && u.isOnGround && !u.isJumping) {
       u.vy = JUMP_FORCE;
       u.isJumping = true;
       u.isOnGround = false;
-      // Jump particles
-      for (let i = 0; i < 10; i++) {
-        state.particles.push({
-          x: u.x + u.width / 2,
-          y: u.y + u.height,
-          vx: (Math.random() - 0.5) * 4,
-          vy: Math.random() * 2,
-          life: 20,
-          color: '#90EE90',
-          size: 3 + Math.random() * 3,
-        });
-      }
     }
     
-    // Check for climbing (near tall tree)
-    u.isClimbing = false;
-    state.obstacles.forEach(obs => {
-      if (obs.type === 'tallTree') {
-        const nearTrunk = u.x + u.width > obs.x && u.x < obs.x + 50;
-        if (nearTrunk && (keys.has('ArrowUp') || keys.has('w'))) {
-          u.isClimbing = true;
-          u.vy = -CLIMB_SPEED;
-          u.isJumping = false;
-        }
-        // Check platform collisions
-        if (obs.platform) {
-          obs.platform.forEach(p => {
-            if (checkCollision(
-              { x: u.x, y: u.y + u.height - 5, width: u.width, height: 10 },
-              { x: p.x, y: p.y, width: p.width, height: p.height }
-            ) && u.vy > 0) {
-              u.y = p.y - u.height;
-              u.vy = 0;
-              u.isOnGround = true;
-              u.isJumping = false;
-            }
-          });
-        }
-      }
-    });
-    
-    // Apply gravity
-    if (!u.isClimbing) {
-      u.vy += GRAVITY;
-    }
-    
-    // Update position
+    u.vy += GRAVITY;
     u.x += u.vx;
     u.y += u.vy;
     
-    // Ground collision
     if (u.y + u.height > GROUND_Y) {
       u.y = GROUND_Y - u.height;
       u.vy = 0;
@@ -775,438 +735,252 @@ export default function UnicornRun() {
       u.isJumping = false;
     }
     
-    // Keep unicorn on screen (left bound)
+    u.isClimbing = false;
+    state.obstacles.forEach(obs => {
+      if (obs.type === 'tallTree' && u.x + u.width > obs.x && u.x < obs.x + 50) {
+         if (keys.has('ArrowUp') || keys.has('w')) {
+             u.vy = -CLIMB_SPEED; u.isClimbing = true;
+         }
+      }
+      if (obs.platform) {
+          obs.platform.forEach(p => {
+              if (u.x + u.width > p.x && u.x < p.x + p.width &&
+                  u.y + u.height > p.y && u.y + u.height < p.y + 20 && u.vy > 0) {
+                  u.y = p.y - u.height;
+                  u.vy = 0;
+                  u.isOnGround = true;
+                  u.isJumping = false;
+              }
+          });
+      }
+    });
+
     if (u.x < 50) u.x = 50;
     
-    // Update camera
-    state.camera.x = u.x - 200;
+    const targetCamX = u.x - 200;
+    state.camera.x += (targetCamX - state.camera.x) * 0.1;
     
-    // Check obstacle collisions
+    if (u.invincible > 0) u.invincible--;
+
+    const unicornRect = { x: u.x + 10, y: u.y + 10, width: u.width - 20, height: u.height - 10 };
+    
     state.obstacles.forEach(obs => {
-      const obsRect = { x: obs.x, y: obs.y, width: obs.width, height: obs.height };
-      
-      if (obs.type === 'hole') {
-        // Fall into hole
-        if (u.x + u.width > obs.x + 10 && u.x < obs.x + obs.width - 10 && 
-            u.y + u.height >= GROUND_Y) {
-          state.gameOver = true;
-          if (state.score > highScore) setHighScore(state.score);
+        const obsRect = { x: obs.x, y: obs.y, width: obs.width, height: obs.height };
+        
+        if (unicornRect.x < obsRect.x + obsRect.width &&
+            unicornRect.x + unicornRect.width > obsRect.x &&
+            unicornRect.y < obsRect.y + obsRect.height &&
+            unicornRect.y + unicornRect.height > obsRect.y) {
+                
+            if (obs.type === 'hole' || obs.type === 'chocolate_pit') {
+                if (u.y + u.height >= GROUND_Y) {
+                     state.gameOver = true;
+                     if (state.score > highScore) setHighScore(state.score);
+                }
+            } else if (u.invincible <= 0) {
+                 if (u.vx > 0) u.x = obsRect.x - u.width;
+                 else if (u.vx < 0) u.x = obsRect.x + obsRect.width;
+            }
         }
-      } else {
-        // Side collision with tree/rock
-        if (checkCollision({ x: u.x, y: u.y, width: u.width, height: u.height }, obsRect)) {
-          if (obs.type === 'tree' || obs.type === 'rock') {
-            // Push back
-            if (u.vx > 0) u.x = obs.x - u.width;
-            else if (u.vx < 0) u.x = obs.x + obs.width;
-          }
-        }
-      }
     });
+
+    state.collectibles.forEach(c => {
+        if (c.collected) return;
+        if (unicornRect.x < c.x + 30 && unicornRect.x + unicornRect.width > c.x &&
+            unicornRect.y < c.y + 30 && unicornRect.y + unicornRect.height > c.y) {
+                c.collected = true;
+                state.score += c.value;
+                for(let i=0; i<5; i++) {
+                    state.particles.push({
+                        x: c.x, y: c.y,
+                        vx: (Math.random()-0.5)*5, vy: (Math.random()-0.5)*5,
+                        life: 20, color: '#FFD700', size: 3
+                    });
+                }
+        }
+    });
+
+    state.distance = Math.floor(u.x / 10);
     
-    // Update score
-    state.score = Math.floor(u.x / 10);
-    
-    // Generate more obstacles
+    // Biome Progression
+    if (state.distance > 0 && state.distance % 1000 === 0 && state.distance !== state.lastBiomeSwitch) {
+        const biomes: BiomeType[] = ['MEADOW', 'CANDY', 'SKY'];
+        const nextBiomeIndex = (biomes.indexOf(state.biome) + 1) % biomes.length;
+        state.biome = biomes[nextBiomeIndex];
+        state.lastBiomeSwitch = state.distance;
+    }
+
     const lastObs = state.obstacles[state.obstacles.length - 1];
-    if (lastObs && lastObs.x < state.camera.x + 2000) {
-      state.obstacles.push(...generateObstacles(lastObs.x + lastObs.width, 5));
+    if (lastObs && lastObs.x < state.camera.x + 1500) {
+        const chunk = generateChunk(lastObs.x + lastObs.width + 200, state.biome);
+        state.obstacles.push(...chunk.obstacles);
+        state.collectibles.push(...chunk.collectibles);
     }
     
-    // Remove off-screen obstacles
-    state.obstacles = state.obstacles.filter(o => o.x > state.camera.x - 200);
-    
-    // Update particles
-    state.particles.forEach(p => {
-      p.x += p.vx;
-      p.y += p.vy;
-      p.life--;
-    });
-    state.particles = state.particles.filter(p => p.life > 0);
-    
-    // Update butterflies
-    state.butterflies.forEach(b => {
-      b.x += b.speed;
-      if (b.x > state.camera.x + 1000) b.x = state.camera.x - 100;
-    });
-    
-    // Update clouds
-    state.clouds.forEach(c => {
-      c.x += c.speed;
-      if (c.x > state.camera.x + 1500) c.x = state.camera.x - 300;
-    });
-    
-    // Draw
+    state.obstacles = state.obstacles.filter(o => o.x > state.camera.x - 500);
+    state.collectibles = state.collectibles.filter(c => c.x > state.camera.x - 500);
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     drawBackground(ctx, time);
+    
     state.obstacles.forEach(o => drawObstacle(ctx, o, state.camera.x));
+    state.collectibles.filter(c => !c.collected).forEach(c => drawCollectible(ctx, c, state.camera.x, time));
+    
     drawUnicorn(ctx, state.camera.x, time);
-    drawParticles(ctx);
     
-    // Draw UI
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-    ctx.fillRect(10, 10, 150, 40);
-    ctx.fillStyle = '#FFD700';
-    ctx.font = 'bold 20px Arial';
-    ctx.fillText(`⭐ ${state.score}`, 25, 38);
-    
+    state.particles.forEach(p => {
+        p.x += p.vx; p.y += p.vy; p.life--;
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = p.life / 20;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill();
+    });
+    ctx.globalAlpha = 1;
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+    ctx.roundRect(10, 10, 200, 50, 10);
+    ctx.fill();
+    ctx.fillStyle = '#FF69B4';
+    ctx.font = 'bold 24px Comic Sans MS, Arial';
+    ctx.fillText(`⭐ ${state.score}`, 25, 42);
+    ctx.fillStyle = '#666';
+    ctx.font = '16px Arial';
+    ctx.fillText(`Dist: ${state.distance}m`, 110, 42);
+
     gameLoopRef.current = requestAnimationFrame(gameLoop);
-  }, [generateObstacles, highScore, customization]);
+  }, [highScore, customization, createObstacle, generateChunk, drawBackground, drawObstacle, drawUnicorn]);
 
-  // Draw game over / start screen
-  const drawOverlay = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const state = gameStateRef.current;
-    
-    if (!state.started || state.gameOver) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
-      ctx.fillStyle = '#FF69B4';
-      ctx.font = 'bold 48px Arial';
-      ctx.textAlign = 'center';
-      
-      if (state.gameOver) {
-        ctx.fillText('💔 Oh no!', canvas.width / 2, 150);
-        ctx.fillStyle = '#FFB6C1';
-        ctx.font = 'bold 32px Arial';
-        ctx.fillText(`Score: ${state.score}`, canvas.width / 2, 200);
-        if (highScore > 0) {
-          ctx.fillStyle = '#FFD700';
-          ctx.fillText(`High Score: ${highScore}`, canvas.width / 2, 240);
-        }
-      } else {
-        ctx.fillText('🦄 Unicorn Run!', canvas.width / 2, 150);
-        ctx.fillStyle = '#FFB6C1';
-        ctx.font = '24px Arial';
-        ctx.fillText('Help the unicorn run and jump!', canvas.width / 2, 200);
-      }
-      
-      ctx.fillStyle = '#90EE90';
-      ctx.font = '20px Arial';
-      ctx.fillText('Press SPACE or TAP to start', canvas.width / 2, 300);
-      ctx.fillText('← → or A D to move', canvas.width / 2, 340);
-      ctx.fillText('↑ or W or SPACE to jump', canvas.width / 2, 370);
-      ctx.fillText('Climb tall trees by holding ↑', canvas.width / 2, 400);
-      
-      ctx.textAlign = 'left';
-    }
-  }, [highScore]);
-
-  // Event handlers
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       keysRef.current.add(e.key);
-      
       if (e.key === ' ' || e.key === 'Enter') {
         const state = gameStateRef.current;
-        if (!state.started || state.gameOver) {
-          initGame();
-        }
+        if (!state.started || state.gameOver) initGame();
       }
     };
-    
-    const handleKeyUp = (e: KeyboardEvent) => {
-      keysRef.current.delete(e.key);
-    };
-    
-    const handleTouch = () => {
-      const state = gameStateRef.current;
-      if (!state.started || state.gameOver) {
-        initGame();
-      } else {
-        keysRef.current.add(' ');
-        setTimeout(() => keysRef.current.delete(' '), 100);
-      }
-    };
-    
+    const handleKeyUp = (e: KeyboardEvent) => keysRef.current.delete(e.key);
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
-    canvasRef.current?.addEventListener('touchstart', handleTouch);
-    
     return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      canvasRef.current?.removeEventListener('touchstart', handleTouch);
-    };
+        window.removeEventListener('keydown', handleKeyDown);
+        window.removeEventListener('keyup', handleKeyUp);
+    }
   }, [initGame]);
 
-  // Start game loop
   useEffect(() => {
-    gameLoopRef.current = requestAnimationFrame(gameLoop);
-    return () => {
-      if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
-    };
+      gameLoopRef.current = requestAnimationFrame(gameLoop);
+      return () => { if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current); };
   }, [gameLoop]);
-
-  // Draw overlay on state change
-  useEffect(() => {
-    drawOverlay();
-  }, [drawOverlay]);
 
   return (
     <div style={{
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
-      padding: '15px',
+      padding: '20px',
       minHeight: '100vh',
-      background: 'linear-gradient(180deg, #87CEEB 0%, #B0E0E6 50%, #FFE4E1 100%)',
+      background: 'linear-gradient(135deg, #FFB6C1 0%, #87CEEB 100%)',
+      fontFamily: 'Comic Sans MS, cursive, sans-serif'
     }}>
-      {/* Header */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        width: '100%',
-        maxWidth: 800,
-        marginBottom: '10px'
+      <h1 style={{ 
+          fontSize: '3rem', 
+          color: '#FFF', 
+          textShadow: '3px 3px 0 #FF1493',
+          marginBottom: '20px'
       }}>
-        <h1 style={{
-          color: '#FF69B4',
-          textShadow: '3px 3px 0 #FFB6C1, -1px -1px 0 #FF1493',
-          fontSize: 'clamp(1.5rem, 5vw, 2.5rem)',
-          textAlign: 'center',
-          flex: 1
-        }}>
-          🦄 Unicorn Run!
-        </h1>
-        
-        <button
-          onClick={() => setShowCustomize(true)}
-          style={{
-            padding: '10px 15px',
-            borderRadius: '25px',
-            border: 'none',
-            background: 'linear-gradient(135deg, #FF69B4, #FF1493)',
-            color: 'white',
-            fontSize: '1rem',
-            fontWeight: 'bold',
-            cursor: 'pointer',
-            boxShadow: '0 4px 15px rgba(255, 105, 180, 0.4)'
-          }}
-        >
-          🎨 Customize
-        </button>
-      </div>
+        🦄 Unicorn Run 2.0
+      </h1>
 
-      {/* Game Canvas */}
-      <div style={{
-        background: 'white',
-        borderRadius: '20px',
-        padding: '10px',
-        boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
-        overflow: 'hidden'
-      }}>
-        <canvas
-          ref={canvasRef}
-          width={800}
-          height={500}
-          style={{
-            display: 'block',
-            maxWidth: '100%',
-            height: 'auto',
-            borderRadius: '15px'
-          }}
+      <div style={{ position: 'relative', borderRadius: '20px', overflow: 'hidden', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }}>
+        <canvas 
+            ref={canvasRef} 
+            width={800} 
+            height={500} 
+            style={{ background: '#FFF', display: 'block' }}
         />
+        
+        {(!gameStateRef.current.started || gameStateRef.current.gameOver) && (
+            <div style={{
+                position: 'absolute', inset: 0, 
+                background: 'rgba(0,0,0,0.6)', 
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                color: 'white', textAlign: 'center'
+            }}>
+                <h2 style={{ fontSize: '3rem', margin: 0 }}>
+                    {gameStateRef.current.gameOver ? 'Game Over!' : 'Ready to Run?'}
+                </h2>
+                <p style={{ fontSize: '1.5rem' }}>
+                    {gameStateRef.current.gameOver ? `Score: ${gameStateRef.current.score}` : 'Press SPACE to Start'}
+                </p>
+                <button 
+                    onClick={initGame}
+                    style={{
+                        padding: '15px 40px', fontSize: '1.5rem', borderRadius: '50px',
+                        background: '#FF1493', color: 'white', border: 'none', cursor: 'pointer',
+                        marginTop: '20px', boxShadow: '0 5px 15px rgba(255,20,147,0.4)'
+                    }}
+                >
+                    {gameStateRef.current.gameOver ? 'Try Again' : 'Let\'s Go!'}
+                </button>
+                <button
+                    onClick={() => setShowCustomize(true)}
+                    style={{
+                        marginTop: '15px', background: 'transparent', border: '2px solid white',
+                        color: 'white', padding: '10px 20px', borderRadius: '20px', cursor: 'pointer'
+                    }}
+                >
+                    🎨 Customize Unicorn
+                </button>
+            </div>
+        )}
       </div>
 
-      {/* Mobile Controls */}
-      <div style={{
-        marginTop: '20px',
-        display: 'flex',
-        gap: '15px'
-      }}>
-        <button
-          onTouchStart={() => keysRef.current.add('ArrowLeft')}
-          onTouchEnd={() => keysRef.current.delete('ArrowLeft')}
-          onMouseDown={() => keysRef.current.add('ArrowLeft')}
-          onMouseUp={() => keysRef.current.delete('ArrowLeft')}
-          onMouseLeave={() => keysRef.current.delete('ArrowLeft')}
-          style={{
-            width: 70,
-            height: 70,
-            borderRadius: '50%',
-            border: 'none',
-            background: 'linear-gradient(135deg, #FFB6C1, #FF69B4)',
-            fontSize: '2rem',
-            boxShadow: '0 4px 15px rgba(255, 105, 180, 0.4)',
-            cursor: 'pointer'
-          }}
-        >
-          ←
-        </button>
-        <button
-          onTouchStart={() => keysRef.current.add(' ')}
-          onTouchEnd={() => keysRef.current.delete(' ')}
-          onMouseDown={() => keysRef.current.add(' ')}
-          onMouseUp={() => keysRef.current.delete(' ')}
-          onMouseLeave={() => keysRef.current.delete(' ')}
-          style={{
-            width: 90,
-            height: 70,
-            borderRadius: '35px',
-            border: 'none',
-            background: 'linear-gradient(135deg, #90EE90, #32CD32)',
-            fontSize: '1.2rem',
-            fontWeight: 'bold',
-            color: 'white',
-            boxShadow: '0 4px 15px rgba(50, 205, 50, 0.4)',
-            cursor: 'pointer'
-          }}
-        >
-          JUMP
-        </button>
-        <button
-          onTouchStart={() => keysRef.current.add('ArrowRight')}
-          onTouchEnd={() => keysRef.current.delete('ArrowRight')}
-          onMouseDown={() => keysRef.current.add('ArrowRight')}
-          onMouseUp={() => keysRef.current.delete('ArrowRight')}
-          onMouseLeave={() => keysRef.current.delete('ArrowRight')}
-          style={{
-            width: 70,
-            height: 70,
-            borderRadius: '50%',
-            border: 'none',
-            background: 'linear-gradient(135deg, #FFB6C1, #FF69B4)',
-            fontSize: '2rem',
-            boxShadow: '0 4px 15px rgba(255, 105, 180, 0.4)',
-            cursor: 'pointer'
-          }}
-        >
-          →
-        </button>
+      <div style={{ marginTop: '20px', textAlign: 'center', color: '#FFF' }}>
+        <p>Controls: Arrows / WASD to Move & Jump</p>
       </div>
 
-      {/* Instructions */}
-      <div style={{
-        marginTop: '20px',
-        padding: '15px 25px',
-        background: 'rgba(255, 255, 255, 0.9)',
-        borderRadius: '15px',
-        textAlign: 'center',
-        maxWidth: 500
-      }}>
-        <p style={{ margin: 0, color: '#666' }}>
-          🌈 Jump over holes and obstacles! 🦄 Climb tall trees for bonus points! ⭐
-        </p>
-      </div>
-
-      {/* Customize Modal */}
       {showCustomize && (
-        <div
-          onClick={() => setShowCustomize(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.7)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '20px',
-            zIndex: 1000
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'linear-gradient(135deg, #FFF0F5, #FFE4E1)',
-              borderRadius: '25px',
-              padding: '30px',
-              maxWidth: 400,
-              width: '100%'
-            }}
-          >
-            <h2 style={{ textAlign: 'center', color: '#FF69B4', marginBottom: 20 }}>
-              🎨 Customize Your Unicorn
-            </h2>
-            
-            {/* Body Color */}
-            <div style={{ marginBottom: 20 }}>
-              <h3 style={{ color: '#666', marginBottom: 10 }}>Body Color</h3>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {UNICORN_COLORS.body.map(color => (
-                  <button
-                    key={color}
-                    onClick={() => setCustomization(c => ({ ...c, bodyColor: color }))}
-                    style={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: '50%',
-                      border: customization.bodyColor === color ? '3px solid #FF69B4' : '2px solid #ddd',
-                      background: color,
-                      cursor: 'pointer',
-                      transform: customization.bodyColor === color ? 'scale(1.1)' : 'scale(1)'
-                    }}
-                  />
+        <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 100,
+            display: 'flex', alignItems: 'center', justifyContent: 'center'
+        }}>
+            <div style={{
+                background: 'white', padding: '30px', borderRadius: '20px', maxWidth: '400px', width: '90%'
+            }}>
+                <h2 style={{ textAlign: 'center', color: '#FF1493' }}>Style Your Unicorn</h2>
+                
+                {['Body', 'Mane', 'Horn'].map(part => (
+                    <div key={part} style={{ marginBottom: '15px' }}>
+                        <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>{part} Color</label>
+                        <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
+                            {UNICORN_COLORS[part.toLowerCase() as keyof typeof UNICORN_COLORS].map(c => (
+                                <div 
+                                    key={c}
+                                    onClick={() => setCustomization(prev => ({
+                                        ...prev, 
+                                        [`${part.toLowerCase()}Color`]: c
+                                    }))}
+                                    style={{
+                                        width: '30px', height: '30px', borderRadius: '50%', background: c,
+                                        cursor: 'pointer', border: '2px solid #ddd',
+                                        transform: customization[`${part.toLowerCase()}Color` as keyof typeof customization] === c ? 'scale(1.2)' : 'none',
+                                        borderColor: customization[`${part.toLowerCase()}Color` as keyof typeof customization] === c ? '#FF1493' : '#ddd'
+                                    }}
+                                />
+                            ))}
+                        </div>
+                    </div>
                 ))}
-              </div>
-            </div>
-            
-            {/* Mane Color */}
-            <div style={{ marginBottom: 20 }}>
-              <h3 style={{ color: '#666', marginBottom: 10 }}>Mane & Tail</h3>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {UNICORN_COLORS.mane.map(color => (
-                  <button
-                    key={color}
-                    onClick={() => setCustomization(c => ({ ...c, maneColor: color }))}
+                
+                <button 
+                    onClick={() => setShowCustomize(false)}
                     style={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: '50%',
-                      border: customization.maneColor === color ? '3px solid #FF69B4' : '2px solid #ddd',
-                      background: color,
-                      cursor: 'pointer',
-                      transform: customization.maneColor === color ? 'scale(1.1)' : 'scale(1)'
+                        width: '100%', padding: '15px', background: '#FF1493', color: 'white',
+                        border: 'none', borderRadius: '10px', fontSize: '1.2rem', cursor: 'pointer'
                     }}
-                  />
-                ))}
-              </div>
+                >
+                    Done
+                </button>
             </div>
-            
-            {/* Horn Color */}
-            <div style={{ marginBottom: 20 }}>
-              <h3 style={{ color: '#666', marginBottom: 10 }}>Horn</h3>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {UNICORN_COLORS.horn.map(color => (
-                  <button
-                    key={color}
-                    onClick={() => setCustomization(c => ({ ...c, hornColor: color }))}
-                    style={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: '50%',
-                      border: customization.hornColor === color ? '3px solid #FF69B4' : '2px solid #ddd',
-                      background: color,
-                      cursor: 'pointer',
-                      transform: customization.hornColor === color ? 'scale(1.1)' : 'scale(1)'
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-            
-            <button
-              onClick={() => setShowCustomize(false)}
-              style={{
-                width: '100%',
-                padding: '15px',
-                borderRadius: 15,
-                border: 'none',
-                background: 'linear-gradient(135deg, #FF69B4, #FF1493)',
-                color: 'white',
-                fontWeight: 'bold',
-                fontSize: '1.1rem',
-                cursor: 'pointer'
-              }}
-            >
-              Done! ✓
-            </button>
-          </div>
         </div>
       )}
     </div>
