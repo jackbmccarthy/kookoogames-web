@@ -3,6 +3,7 @@ import Link from 'next/link';
 export default function Home() {
   const games = [
     { name: 'Word Search', emoji: '🔍', path: '/games/word-search', description: 'Find hidden words!' },
+    { name: 'Unicorn Run', emoji: '🦄', path: '/games/unicorn-run', description: 'Jump & climb with your unicorn!' },
   ];
 
   return (
